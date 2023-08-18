@@ -34,13 +34,13 @@ export default class OpticalScope {
 			ImageLabel.Size = new UDim2(1, 0, 1, 0);
 			ImageLabel.Parent = this.GUI;
 			ImageLabel.Name = "Reticle";
-			ImageLabel.Image = "rbxassetid://12779371340";
+			ImageLabel.Image = "rbxassetid://13404580752";
 			ImageLabel.BackgroundTransparency = 1;
-			ImageLabel.ScaleType = Enum.ScaleType.Fit;
+			ImageLabel.ScaleType = Enum.ScaleType.Crop;
 			ImageLabel.ImageColor3 = new Color3(1, 0, 0);
-			ImageLabel.ImageTransparency = 0.6;
-			ImageLabel.SetAttribute("PPSMultiplier", 1);
-			ImageLabel.SetAttribute("SizeMultiplier", 0.8);
+			ImageLabel.ImageTransparency = 0.4;
+			ImageLabel.SetAttribute("PPSMultiplier", 0.5);
+			ImageLabel.SetAttribute("SizeMultiplier", 1);
 		}
 	}
 

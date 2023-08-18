@@ -2,6 +2,8 @@ import { Players, Workspace } from "@rbxts/services";
 import { MoreMath } from "Framework/util/MoreMath";
 import BaseController from "./BaseController";
 import CameraController from "./CameraController";
+import PlayerController from "./PlayerController";
+import { WeaponEnums } from "Framework/util/enums";
 
 export default class WeaponController extends BaseController {
 	public Camera = Workspace.CurrentCamera;
@@ -10,6 +12,7 @@ export default class WeaponController extends BaseController {
 
 	public AnimationController: Animator;
 	public CameraController: CameraController;
+	public PlayerController: PlayerController;
 	public LoadedAnimations: { [Name: string]: AnimationTrack } = {};
 
 	public CameraOffsets: { [Name: string]: CFrame };
@@ -22,17 +25,25 @@ export default class WeaponController extends BaseController {
 	public RecoilOffsetGoal = new CFrame();
 	public WalkOffset = new CFrame();
 	public WallOffset = new CFrame();
+	public WalkSwayOffset = new CFrame();
+	public ViewSwayOffset = new CFrame();
+	public ViewSwayGoal = new CFrame();
 	public CastParams = new RaycastParams();
 
+	private Highlights: Highlight[];
+
+	public ViewBobDelta = 0;
+
 	public Recoil = {
-		Vertical: [2, 5],
-		Horizontal: [-3, 3],
+		Vertical: 5,
+		Horizontal: 3,
 		Multiplier: 2,
 	};
+	public RawCameraVRecoil = 5;
 
 	public ErgoMultiplier = 1;
 
-	constructor(Model: Model, CameraController: CameraController) {
+	constructor(Model: Model, CameraController: CameraController, PlayerController: PlayerController) {
 		super();
 
 		this.NonClonedModel = Model;
@@ -42,7 +53,10 @@ export default class WeaponController extends BaseController {
 		const AnimationController = new Instance("AnimationController", this.Model);
 		this.AnimationController = new Instance("Animator", AnimationController);
 
+		this.PlayerController = PlayerController;
 		this.CameraController = CameraController;
+
+		this.Highlights = this.GetHeatHighlights();
 
 		this.Model.PivotTo(new CFrame());
 
@@ -50,7 +64,7 @@ export default class WeaponController extends BaseController {
 		this.WeaponAttachments = {};
 
 		this.CastParams.FilterType = Enum.RaycastFilterType.Include;
-		this.CastParams.FilterDescendantsInstances = [Workspace.FindFirstChild("TestMap") as Folder];
+		this.CastParams.FilterDescendantsInstances = [Workspace.FindFirstChild("TestMap") as Folder, Workspace.Terrain];
 
 		for (const Part of this.Model.GetChildren()) {
 			if (Part.IsA("BasePart")) {
@@ -64,6 +78,12 @@ export default class WeaponController extends BaseController {
 		}
 
 		this.CurrentCameraOffset = this.CameraOffsets.Idle;
+	}
+
+	public GetViewBobDelta(Delta: number) {
+		this.ViewBobDelta += Delta;
+
+		return this.ViewBobDelta;
 	}
 
 	public LoadAnimation(AnimationName: string, Animation: string) {
@@ -105,21 +125,40 @@ export default class WeaponController extends BaseController {
 		return this.WeaponAttachments[Name].WorldCFrame;
 	}
 
+	public GetHeatHighlights(): Highlight[] {
+		const Highlights: Highlight[] = [];
+
+		for (const Instance of this.Model?.GetDescendants() ?? []) {
+			if (Instance.IsA("Highlight")) {
+				Highlights.push(Instance);
+			}
+		}
+
+		return Highlights;
+	}
+
 	public ApplyRecoil(Amount: number) {
 		this.RecoilOffsetGoal = this.RecoilOffsetGoal.mul(new CFrame(0, 0, math.clamp(Amount, 0, 0)));
 
 		// Calculate a random amount of recoil based off of pre-defined limits.
 
-		const XRot = (math.random(this.Recoil.Vertical[0] * 100, this.Recoil.Vertical[1] * 100) / 100) * Amount;
-		const YRot = (math.random(this.Recoil.Horizontal[0] * 100, this.Recoil.Horizontal[1] * 100) / 100) * Amount;
+		const XRot = this.Recoil.Vertical * Amount;
+		const YRot = math.random(-this.Recoil.Horizontal, this.Recoil.Horizontal) * Amount;
 
 		this.RecoilOffsetGoal = this.RecoilOffsetGoal.mul(CFrame.Angles(math.rad(XRot), math.rad(YRot), 0));
+	}
+
+	public ApplyHeatEffect(Heat: number) {
+		for (const Highlight of this.Highlights) {
+			Highlight.FillTransparency = 1.3 - Heat;
+		}
 	}
 
 	public Update(DeltaTime: number): void {
 		const RootCF = this.Model?.PrimaryPart?.CFrame ?? new CFrame();
 		const MuzzleCF = this.GetAttachmentWorldCF("Muzzle") ?? new CFrame();
 		const ModelSize = this.NonClonedModel?.GetExtentsSize() ?? new Vector3();
+		const MouseDelta = this.CameraController.GetMouseDelta();
 
 		// Raycast to the nearest wall
 		const MuzzleToWallDist = Workspace.Raycast(
@@ -134,12 +173,18 @@ export default class WeaponController extends BaseController {
 		let ScopeTransparency = 0;
 
 		if (
-			this.AimState === 1 &&
+			this.AimState === WeaponEnums.AimState.Aim &&
 			((MuzzleToWallDist && MuzzleToWallDist.Distance > ModelSize.Z - 0.25) || !MuzzleToWallDist)
 		) {
 			AimOffset = this.CameraOffsets.Aim;
-			NewFOV = 35;
+			NewFOV = 50;
 			ScopeTransparency = 1;
+		}
+
+		if (this.AimState === WeaponEnums.AimState.Aim) {
+			this.CameraController.Sensitivity = 0.7;
+		} else {
+			this.CameraController.Sensitivity = 1;
 		}
 
 		const AimSpeed = DeltaTime * 10 * this.ErgoMultiplier;
@@ -148,6 +193,8 @@ export default class WeaponController extends BaseController {
 		this.CurrentCameraOffset = this.CurrentCameraOffset.Lerp(AimOffset, AimSpeed);
 		this.RecoilOffsetGoal = this.RecoilOffsetGoal.Lerp(new CFrame(), RecoilSpeed);
 		this.RecoilOffset = this.RecoilOffset.Lerp(this.RecoilOffsetGoal, RecoilSpeed);
+
+		// Wall detect
 
 		if (MuzzleToWallDist !== undefined && MuzzleToWallDist.Distance < ModelSize?.Z) {
 			this.WallOffset = this.WallOffset.Lerp(
@@ -158,21 +205,45 @@ export default class WeaponController extends BaseController {
 			this.WallOffset = this.WallOffset.Lerp(new CFrame(), AimSpeed);
 		}
 
-		const MoveVelocity = math.floor(
-			(Players.LocalPlayer.Character?.PrimaryPart?.AssemblyLinearVelocity.Magnitude ?? 0) + 0.5,
-		);
+		// View bob
+
+		const MoveVelocity = this.PlayerController.Velocity.Magnitude;
 
 		let WalkOffset = new CFrame();
+		let WalkSwayOffset = new CFrame();
 
-		if (MoveVelocity > 0) {
-			WalkOffset = CFrame.Angles(0, 0, math.cos((tick() * MoveVelocity) / 2) / 32);
+		const VDelta = this.GetViewBobDelta(DeltaTime * MoveVelocity);
 
-			WalkOffset = WalkOffset.mul(new CFrame(0, math.sin(tick() * MoveVelocity) / 32, 0));
+		// Make the walk sway offset rotate on the Y axis depending on the X velocity of the player
+
+		const M = 0.025;
+
+		WalkSwayOffset = CFrame.Angles(0, math.clamp(this.PlayerController.GetNonRelativeWishDir().X, -M, M), 0);
+
+		if (MoveVelocity <= 4) {
+			this.ViewBobDelta = 0;
+		}
+
+		if (VDelta > 0) {
+			WalkOffset = CFrame.Angles(0, 0, math.sin(VDelta / 2) / 32);
+
+			WalkOffset = WalkOffset.mul(new CFrame(0, math.sin(VDelta) / 32, 0));
 		}
 
 		this.WalkOffset = this.WalkOffset.Lerp(WalkOffset, AimSpeed);
+		this.WalkSwayOffset = this.WalkSwayOffset.Lerp(WalkSwayOffset, AimSpeed);
+
+		this.ViewSwayGoal = CFrame.Angles(MouseDelta.Y, -MouseDelta.X / 3, 0);
+
+		this.ViewSwayOffset = this.ViewSwayOffset.Lerp(this.ViewSwayGoal, AimSpeed);
+
+		// Apply offsets
+
+		const O = this.RecoilOffset.ToOrientation();
 
 		this.CameraController.Offset = this.RecoilOffset.Lerp(new CFrame(), 0.1);
+		this.CameraController.AddRotation(new Vector2(0, -O[0] * (DeltaTime * this.RawCameraVRecoil)));
+
 		this.CameraController.Offset = this.CameraController.Offset.mul(this.WalkOffset.Lerp(new CFrame(), 0.5));
 
 		for (const BasePart of this.Model?.GetDescendants() ?? []) {
@@ -189,18 +260,14 @@ export default class WeaponController extends BaseController {
 			}
 		}
 
-		const Lens = this.Model?.FindFirstChild("Lens") as BasePart | undefined;
-
-		// if (Lens) {
-		// 	Lens.Transparency = MoreMath.Lerp(Lens.Transparency, 1.5 - ScopeTransparency, AimSpeed);
-		// }
-
 		if (this.Model && this.Camera) {
 			this.Model.PivotTo(
 				this.Camera.CFrame.mul(this.CurrentCameraOffset.Inverse())
 					.mul(this.RecoilOffset)
 					.mul(this.WalkOffset)
-					.mul(this.WallOffset),
+					.mul(this.WalkSwayOffset)
+					.mul(this.WallOffset)
+					.mul(this.ViewSwayOffset),
 			);
 			this.CameraController.FieldOfView = MoreMath.Lerp(this.Camera.FieldOfView, NewFOV, AimSpeed);
 		}

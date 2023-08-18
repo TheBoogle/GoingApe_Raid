@@ -1,17 +1,13 @@
-import { RunService } from "@rbxts/services";
-import Bullet, { BulletState } from "./Bullet";
-
-export enum HandlerState {
-	Paused = 0,
-	Running = 1,
-}
+import { RunService, Workspace } from "@rbxts/services";
+import Bullet from "./Bullet";
+import { GameEnums, WeaponEnums } from "Framework/util/enums";
 
 export default class BulletHandler {
 	public Bullets: Bullet[] = [];
-	public State: HandlerState = HandlerState.Running;
+	public Stat = GameEnums.HandlerState.Running;
 
 	constructor() {
-		RunService.Heartbeat.Connect((DeltaTime: number) => {
+		RunService.Stepped.Connect((_, DeltaTime: number) => {
 			this.Update(DeltaTime);
 		});
 	}
@@ -21,16 +17,13 @@ export default class BulletHandler {
 	}
 
 	private Update(DeltaTime: number) {
-		let Index = 0;
-
-		for (const Bullet of this.Bullets) {
-			if (Bullet.State === BulletState.Dead) {
-				this.Bullets.remove(Index);
+		this.Bullets.forEach((Bullet) => {
+			if (Bullet.State === WeaponEnums.BulletState.Dead) {
+				// Remove the bullet from the array
+				this.Bullets.remove(this.Bullets.indexOf(Bullet));
+				return;
 			}
-
 			Bullet.Update(DeltaTime);
-
-			Index++;
-		}
+		});
 	}
 }

@@ -6,6 +6,23 @@ export default class ViewmodelController extends BaseController {
 	public Camera = Workspace.CurrentCamera;
 	public Model: Model | undefined;
 
+	public PlayAnimation(AnimationId: string): void {
+		if (this.Model) {
+			const Animation = new Instance("Animation");
+			Animation.AnimationId = AnimationId;
+
+			const Track = this.Model.FindFirstChildOfClass("AnimationController")
+				?.FindFirstChildOfClass("Animator")
+				?.LoadAnimation(Animation);
+
+			if (Track) {
+				Track.Priority = Enum.AnimationPriority.Action;
+				Track.Looped = true;
+				Track.Play();
+			}
+		}
+	}
+
 	public SetIKTarget(Name: string, Attachment: BasePart | Attachment) {
 		if (this.Model) {
 			for (const IKControl of this.Model.GetDescendants()) {

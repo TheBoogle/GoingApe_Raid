@@ -1,12 +1,8 @@
 import BaseController from "Framework/controllers/BaseController";
-
-export enum DoorState {
-	Closed = 0,
-	Open = 1,
-}
+import { GameEnums } from "Framework/util/enums";
 
 export default class DoorController extends BaseController {
-	public DoorState = DoorState.Closed;
+	public DoorState = GameEnums.DoorState.Closed;
 	public Locked = false;
 	public KeyId = undefined;
 	public OpenSpeed = 1;
@@ -48,10 +44,10 @@ export default class DoorController extends BaseController {
 	 * Toggles the current state of the door
 	 */
 	public ToggleState() {
-		if (this.DoorState === DoorState.Closed) {
-			this.DoorState = DoorState.Open;
+		if (this.DoorState === GameEnums.DoorState.Closed) {
+			this.DoorState = GameEnums.DoorState.Open;
 		} else {
-			this.DoorState = DoorState.Closed;
+			this.DoorState = GameEnums.DoorState.Closed;
 		}
 
 		this.RestartAnimation();
@@ -62,7 +58,7 @@ export default class DoorController extends BaseController {
 			AnimationTrack.Stop(this.OpenSpeed);
 		}
 
-		if (this.DoorState === DoorState.Closed) {
+		if (this.DoorState === GameEnums.DoorState.Closed) {
 			this.LoadedAnimations["Close"].Play(this.OpenSpeed);
 
 			task.delay(1, () => {

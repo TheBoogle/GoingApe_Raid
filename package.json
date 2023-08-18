@@ -12,7 +12,7 @@
   "license": "ISC",
   "devDependencies": {
     "@rbxts/compiler-types": "^2.1.0-types.1",
-    "@rbxts/types": "^1.0.664",
+    "@rbxts/types": "^1.0.679",
     "@typescript-eslint/eslint-plugin": "^5.53.0",
     "@typescript-eslint/parser": "^5.53.0",
     "eslint": "^8.34.0",
@@ -23,7 +23,9 @@
     "typescript": "^4.9.5"
   },
   "dependencies": {
+    "@rbxts/net": "^3.0.6",
     "@rbxts/roact": "^1.4.4-ts.0",
-    "@rbxts/services": "github:roblox-ts/services"
+    "@rbxts/services": "github:roblox-ts/services",
+    "rbxts-transform-guid": "^2.0.0"
   }
 }

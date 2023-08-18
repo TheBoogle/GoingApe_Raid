@@ -1,14 +1,12 @@
 import { Debris, ReplicatedStorage, Workspace } from "@rbxts/services";
 import BulletVisualization from "./DebugBulletVisualization";
+import { BulletInfo } from "Framework/util/gametypes";
+import Ammunition from "Data/Weapons/Ammunition";
+import { WeaponEnums } from "Framework/util/enums";
 
-const MuzzleVelocity = 20;
-const MaxDistance = 2048;
-const BulletGravity = new Vector3(0, -9.6, 0);
-
-export enum BulletState {
-	Live = 0,
-	Dead = 1,
-}
+const MuzzleVelocity = 2000;
+const MaxDistance = 10240;
+const BulletGravity = new Vector3(0, -100, 0);
 
 function CreateEvent() {
 	const Event = new Instance("BindableEvent");
@@ -18,38 +16,40 @@ function CreateEvent() {
 
 export default class Bullet {
 	public Velocity = Vector3.zero;
+	public LastPosition = Vector3.zero;
 	public Position = Vector3.zero;
 	public DoPhysics = true;
-	public Render = false;
 	public CastParams = new RaycastParams();
-	public State = BulletState.Live;
+	public State = WeaponEnums.BulletState.Live;
 	public DistanceTraveled = 0;
 	public PenetrationPower = 1;
+	public Wireframe: WireframeHandleAdornment | undefined;
+	public AmmoType: BulletInfo = Ammunition["5.56x45mm"];
 
-	private Debug = true;
+	private Debug = false;
 
-	public OnHit: RBXScriptSignal;
-	public PenetratedObject: RBXScriptSignal;
-	private OnHitEvent: BindableEvent;
-	private PenetratedObjectEvent: BindableEvent;
-
-	constructor(InitialPosition: Vector3, InitialDirection: Vector3) {
+	constructor(AmmoType: BulletInfo, InitialPosition: Vector3, InitialDirection: Vector3, IgnoreList: Instance[]) {
+		this.AmmoType = AmmoType;
 		this.Position = InitialPosition;
 		this.Velocity = InitialDirection.mul(MuzzleVelocity);
 
-		this.OnHitEvent = CreateEvent();
-		this.OnHit = this.OnHitEvent.Event;
-
-		this.PenetratedObjectEvent = CreateEvent();
-		this.PenetratedObject = this.PenetratedObjectEvent.Event;
+		this.CastParams.FilterType = Enum.RaycastFilterType.Exclude;
+		this.CastParams.FilterDescendantsInstances = IgnoreList;
 	}
 
 	public SetDirection(Direction: Vector3) {
 		this.Velocity = Direction.mul(MuzzleVelocity);
 	}
 
-	private Cast() {
-		return Workspace.Raycast(this.Position, this.Velocity, this.CastParams);
+	private Cast(DeltaTime: number) {
+		return Workspace.Raycast(this.Position, this.Velocity.mul(DeltaTime), this.CastParams);
+	}
+
+	public Kill() {
+		this.State = WeaponEnums.BulletState.Dead;
+
+		this.Wireframe?.Destroy();
+		this.Wireframe = undefined;
 	}
 
 	private FindObjectExitPoint(
@@ -88,14 +88,21 @@ export default class Bullet {
 	}
 
 	public Update(DeltaTime: number): void {
-		if (this.State === BulletState.Dead) {
+		if (this.State === WeaponEnums.BulletState.Dead) {
 			return;
+		}
+
+		if (this.Debug) {
+			if (!this.Wireframe) {
+				this.Wireframe = new Instance("WireframeHandleAdornment");
+			}
+			this.Wireframe.Adornee = Workspace;
+			this.Wireframe.Parent = Workspace;
 		}
 
 		// Check if we hit a bitch
 
-		const Direction = this.Velocity;
-		const Result = this.Cast();
+		const Result = this.Cast(DeltaTime);
 
 		if (Result) {
 			// Hit a bitch
@@ -109,8 +116,10 @@ export default class Bullet {
 				new Color3(1, 0, 0),
 			);
 
+			this.Position = Result.Position;
+
 			if (ObjectModelAncestor && ObjectModelAncestor.FindFirstChildOfClass("Humanoid")) {
-				this.State = BulletState.Dead;
+				this.Kill();
 
 				this.CreateBulletVisualization(
 					new CFrame(Result.Position, Result.Position.add(this.Velocity.Unit)),
@@ -158,14 +167,13 @@ export default class Bullet {
 
 						const AngledScaled = math.sin(AngleRad);
 
-						let ScaledRicochetChance = AngledScaled * RicochetChance * 0.25;
+						const ScaledRicochetChance = AngledScaled * RicochetChance * 0.1;
 
-						if (ScaledRicochetChance < 0.1) {
-							ScaledRicochetChance = 0;
-						}
+						// if (ScaledRicochetChance < 0.1) {
+						// 	ScaledRicochetChance = 0;
+						// }
 
 						if (math.random() < ScaledRicochetChance) {
-							print("fart");
 							// Ricochet
 
 							this.ReflectVelocity(Result.Normal);
@@ -177,7 +185,7 @@ export default class Bullet {
 						} else {
 							// death
 
-							this.State = BulletState.Dead;
+							this.Kill();
 
 							this.CreateBulletVisualization(
 								new CFrame(Result.Position, Result.Position.add(this.Velocity.Unit)),
@@ -188,17 +196,23 @@ export default class Bullet {
 				}
 			}
 		} else {
-			this.Position = this.Position.add(this.Velocity);
-			this.DistanceTraveled += this.Velocity.Magnitude;
+			const V = this.Velocity.mul(DeltaTime);
 
-			if (this.DistanceTraveled >= MaxDistance) {
-				this.State = BulletState.Dead;
-				this.Render = false;
-				this.OnHitEvent.Destroy();
-				this.PenetratedObjectEvent.Destroy();
+			this.Position = this.Position.add(V);
+			this.DistanceTraveled += this.Position.sub(this.LastPosition).Magnitude;
+
+			if (this.DistanceTraveled >= MaxDistance || this.Position.Y < Workspace.FallenPartsDestroyHeight) {
+				this.Kill();
 			}
 
-			this.Velocity = this.Velocity.add(BulletGravity.div(100));
+			this.Velocity = this.Velocity.add(BulletGravity.mul(DeltaTime));
 		}
+
+		if (this.Debug === true && this.Wireframe) {
+			this.Wireframe.Color3 = new Color3(0.85, 0.4, 0.09);
+			this.Wireframe.AddLine(this.LastPosition, this.Position);
+		}
+
+		this.LastPosition = this.Position;
 	}
 }

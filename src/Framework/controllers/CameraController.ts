@@ -29,18 +29,27 @@ export default class CameraController extends BaseController {
 		return PositionA.sub(PositionB).Magnitude;
 	}
 
+	public GetMouseDelta() {
+		return UserInputService.GetMouseDelta().mul(math.rad(0.5)).mul(this.Sensitivity);
+	}
+
+	public AddRotation(Rotation: Vector2) {
+		this.CameraRotation = this.CameraRotation.add(Rotation);
+
+		this.CameraRotation = new Vector2(
+			this.CameraRotation.X,
+			math.clamp(this.CameraRotation.Y, -math.rad(this.MaxYViewAngle), math.rad(this.MaxYViewAngle)),
+		);
+	}
+
 	public Update(DeltaTime: number): void {
 		this.LastCameraCFrame = this.Camera.CFrame;
 
 		this.Camera.CameraType = Enum.CameraType.Scriptable;
 
-		const MouseDelta = UserInputService.GetMouseDelta().mul(math.rad(0.5));
+		const MouseDelta = this.GetMouseDelta();
 
-		this.CameraRotation = this.CameraRotation.add(MouseDelta);
-		this.CameraRotation = new Vector2(
-			this.CameraRotation.X,
-			math.clamp(this.CameraRotation.Y, -math.rad(this.MaxYViewAngle), math.rad(this.MaxYViewAngle)),
-		);
+		this.AddRotation(MouseDelta);
 
 		const CameraRotationCFrame = CFrame.Angles(0, -this.CameraRotation.X, 0).mul(
 			CFrame.Angles(-this.CameraRotation.Y, 0, 0),

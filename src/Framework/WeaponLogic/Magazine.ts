@@ -1,10 +1,20 @@
+import Ammunition from "Data/Weapons/Ammunition";
 import Bullet from "./Bullet";
+import { BulletInfo } from "Framework/util/gametypes";
+import { WeaponEnums } from "Framework/util/enums";
 
 export default class Magazine {
-	public Capacity = 1000;
+	public Capacity = 30;
+	public AmmoType: BulletInfo = Ammunition["5.56x45mm"];
 	public Rounds: Bullet[] = [];
 
-	public constructor() {
+	private IgnoreList: Instance[];
+
+	public constructor(Capacity: number, IgnoreList: Instance[]) {
+		this.IgnoreList = IgnoreList;
+
+		this.Capacity = Capacity;
+
 		this.Reload();
 	}
 
@@ -12,7 +22,7 @@ export default class Magazine {
 		// Load the magazine to the brim.
 
 		for (let I = math.max(this.Rounds.size(), 0); I < this.Capacity; I++) {
-			this.Rounds.push(new Bullet(Vector3.zero, Vector3.zero));
+			this.Rounds.push(new Bullet(this.AmmoType, Vector3.zero, Vector3.zero, this.IgnoreList));
 		}
 	}
 

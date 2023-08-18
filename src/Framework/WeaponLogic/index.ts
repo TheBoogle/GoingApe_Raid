@@ -1,72 +1,79 @@
 import { ContextActionService, ReplicatedStorage, RunService, SoundService, Workspace } from "@rbxts/services";
-import WeaponInfoBase from "Data/Weapons/WeaponInfoBase";
+
+import WeaponInfoBase from "Framework/util/gametypes";
 import CameraController from "Framework/controllers/CameraController";
 import ViewmodelController from "Framework/controllers/ViewmodelController";
 import WeaponController from "Framework/controllers/WeaponController";
+import PlayerController from "Framework/controllers/PlayerController";
+
 import Mod from "Framework/mods/Mod";
 import OpticalScopeMod from "Framework/mods/OpticalScopeMod";
-import Bullet from "./Bullet";
-import BulletHandler from "./BulletHandler";
+
 import Magazine from "./Magazine";
+import BulletHandler from "./BulletHandler";
+import { WeaponLogicState } from "Framework/util/gametypes";
+import { AttachmentInfo, AttachmentType } from "Data/Weapons/Attachments";
 
-enum FireMode {
-	Single = 0,
-	FullAuto = 1,
-}
+import { NetworkingEnums, WeaponEnums } from "Framework/util/enums";
+import { Remotes } from "Framework/Network";
 
-enum BoltType {
-	Manual = 0,
-	Automatic = 1,
-}
+function FindFirstChildNotCaseSensitive(Name: string, Parent: Instance): Instance | undefined {
+	const Children = Parent.GetChildren();
 
-enum TriggerState {
-	Forward = 0,
-	Back = 1,
-}
+	for (const Child of Children) {
+		if (Child.Name.lower() === Name.lower()) {
+			return Child;
+		}
+	}
 
-enum AimState {
-	Idle = 0,
-	Aim = 1,
-}
-
-enum WeaponState {
-	Idle = 0,
-	Firing = 1,
-	Reloading = 2,
+	return undefined;
 }
 
 export default class WeaponLogicBase {
-	private WeaponInfo: WeaponInfoBase;
-	public Magazine: Magazine | undefined;
-	public Chamber: Bullet | undefined;
 	public WeaponController: WeaponController;
 	public ViewmodelController: ViewmodelController;
+	public PlayerController: PlayerController;
+	public AttachmentInfo: Map<AttachmentType, AttachmentInfo>;
 	private ClientBulletHandler = new BulletHandler();
 
-	public FireMode = FireMode.FullAuto;
-	public BoltType = BoltType.Automatic;
-	public TriggerState = TriggerState.Forward;
-	public AimState = AimState.Idle;
-	public WeaponState = WeaponState.Idle;
+	public WeaponInfo: WeaponInfoBase;
+	public readonly WeaponState: WeaponLogicState;
 
 	public ViewmodelEnabled = true;
-
-	public Mods: Mod[] = [];
-	public Sounds: { [Name: string]: Sound } = {};
-
-	public AllowedFireModes: FireMode[] = [FireMode.Single];
-
-	public RPM = 700;
 
 	public constructor(
 		WeaponInfo: WeaponInfoBase,
 		WeaponModel: Model,
 		Viewmodel: Model,
 		CameraController: CameraController,
+		PlayerController: PlayerController,
+		AttachmentInfo: Map<AttachmentType, AttachmentInfo>,
+		ViewmodelAnimations: string[],
 	) {
-		this.Magazine = new Magazine();
-		this.WeaponController = new WeaponController(WeaponModel, CameraController);
+		this.PlayerController = PlayerController;
+		this.AttachmentInfo = AttachmentInfo;
+		this.WeaponController = new WeaponController(WeaponModel, CameraController, this.PlayerController);
+
+		this.WeaponState = {
+			FireMode: WeaponEnums.FireMode.FullAuto,
+			BoltType: WeaponEnums.BoltType.Automatic,
+			TriggerState: WeaponEnums.TriggerState.Forward,
+			AimState: WeaponEnums.AimState.Idle,
+			WeaponState: WeaponEnums.WeaponActionState.Idle,
+			AllowedFireModes: [WeaponEnums.FireMode.Single],
+
+			Chamber: undefined,
+			Magazine: new Magazine(WeaponInfo.Magazine.Capacity, [this.WeaponController.Model ?? new Instance("Part")]),
+			Heat: 0,
+
+			Mods: [],
+			Sounds: {},
+		};
 		this.ViewmodelController = new ViewmodelController(Viewmodel);
+
+		ViewmodelAnimations.forEach((AnimationId) => {
+			this.ViewmodelController.PlayAnimation(AnimationId);
+		});
 
 		this.WeaponInfo = WeaponInfo;
 
@@ -75,9 +82,32 @@ export default class WeaponLogicBase {
 
 	public Initialize() {
 		this.PullBolt();
+		this.CheckOpticalScope();
+		this.AddSounds();
+		this.LoadAnimations();
+		this.SetupWeaponUpdate();
+		this.SetupAutomaticFiringHandler();
+		this.SetupContextActions();
+	}
 
-		this.AddMod(new OpticalScopeMod(this.WeaponController.Model?.FindFirstChild("Lens") as BasePart));
+	private CheckOpticalScope() {
+		const OpticScope = this.AttachmentInfo.get(AttachmentType.Optic);
 
+		if (OpticScope) {
+			// Find the lens
+			const ScopeModel = FindFirstChildNotCaseSensitive(OpticScope.Name, this.WeaponController.Model as Model);
+
+			if (ScopeModel) {
+				const Lens = FindFirstChildNotCaseSensitive("Lens", ScopeModel);
+
+				if (Lens && Lens.IsA("BasePart")) {
+					this.WeaponState.Mods.push(new OpticalScopeMod(Lens));
+				}
+			}
+		}
+	}
+
+	private AddSounds() {
 		for (const [Name, ID] of pairs(this.WeaponInfo.Sounds)) {
 			if (typeIs(ID, "table")) {
 				let I = 1;
@@ -89,27 +119,38 @@ export default class WeaponLogicBase {
 				this.AddSound(Name as string, ID);
 			}
 		}
+	}
 
+	private LoadAnimations() {
 		for (const [Name, ID] of pairs(this.WeaponInfo.Animations)) {
 			this.WeaponController.LoadAnimation(Name as string, ID);
 		}
 
 		for (const [AnimationName, AnimationTrack] of pairs(this.WeaponController.LoadedAnimations)) {
-			for (const [SoundName, Sound] of pairs(this.Sounds)) {
+			for (const [SoundName, Sound] of pairs(this.WeaponState.Sounds)) {
 				AnimationTrack.GetMarkerReachedSignal(SoundName as string).Connect(() => {
 					this.PlaySound(SoundName as string, undefined);
 				});
 			}
 		}
+	}
 
-		this.WeaponController.ErgoMultiplier = this.WeaponInfo.Ergonomics;
+	private SetupWeaponUpdate() {
+		this.WeaponController.ErgoMultiplier = this.WeaponInfo.Ergonomics / 100;
 		this.WeaponController.Recoil = this.WeaponInfo.Recoil;
-		this.RPM = this.WeaponInfo.RPM;
 
 		RunService.BindToRenderStep("WeaponUpdate", Enum.RenderPriority.Camera.Value + 1, (DeltaTime) => {
-			this.WeaponController.AimState = this.AimState;
+			this.WeaponController.AimState = this.WeaponState.AimState;
 
 			this.WeaponController.Update(DeltaTime);
+
+			if (this.WeaponState.TriggerState === WeaponEnums.TriggerState.Forward) {
+				this.WeaponState.Heat -= DeltaTime / 10;
+			}
+
+			this.WeaponState.Heat = math.clamp(this.WeaponState.Heat, 0, 1);
+
+			this.WeaponController.ApplyHeatEffect(this.WeaponState.Heat);
 
 			if (this.ViewmodelEnabled) {
 				this.ViewmodelController.Update();
@@ -118,76 +159,79 @@ export default class WeaponLogicBase {
 				this.ViewmodelController.SetIKTarget("RightArm", this.WeaponController.GetAttachment("RightHand"));
 			}
 
-			for (const Mod of this.Mods) {
+			for (const Mod of this.WeaponState.Mods) {
 				Mod.Update();
 			}
 		});
+	}
 
-		// Automatic firing handler
-		coroutine.wrap(() => {
-			const FireDelay = 60 / this.RPM;
+	private async SetupAutomaticFiringHandler() {
+		const FireDelay = 60 / this.WeaponInfo.RPM;
 
-			// eslint-disable-next-line no-constant-condition
-			while (true) {
-				if (this.TriggerState === TriggerState.Back) {
-					if (this.WeaponState !== WeaponState.Idle) {
-						task.wait();
-						continue;
-					}
-
-					this.WeaponState = WeaponState.Firing;
-
-					let LastShot = os.clock() - FireDelay;
-
-					const FireConnection = RunService.Heartbeat.Connect(() => {
-						if (this.TriggerState !== TriggerState.Back) {
-							FireConnection.Disconnect();
-							return;
-						}
-
-						const CurrentTime = os.clock();
-						const TimeSinceLastShot = CurrentTime - LastShot;
-						const Shots = math.floor(TimeSinceLastShot / FireDelay);
-
-						if (TimeSinceLastShot >= FireDelay) {
-							// Shoot multiple rounds per frame to insure we keep up with the firerate regardless of our FPS
-
-							let ShotARound = false;
-
-							for (let CurrentShot = 1; CurrentShot <= Shots; CurrentShot++) {
-								if (this.Fire()) {
-									ShotARound = true;
-								}
-							}
-
-							if (ShotARound) {
-								this.PlaySound("Fire", [0.95, 1.05]);
-							}
-
-							LastShot += Shots * FireDelay;
-						}
-					});
-
-					while (FireConnection.Connected) {
-						task.wait();
-					}
-
-					this.WeaponState = WeaponState.Idle;
+		// eslint-disable-next-line no-constant-condition
+		while (true) {
+			if (this.WeaponState.TriggerState === WeaponEnums.TriggerState.Back) {
+				if (this.WeaponState.WeaponState !== WeaponEnums.WeaponActionState.Idle) {
+					task.wait();
+					continue;
 				}
 
-				task.wait();
-			}
-		})();
+				this.WeaponState.WeaponState = WeaponEnums.WeaponActionState.Firing;
 
+				let LastShot = os.clock() - FireDelay;
+
+				const FireConnection = RunService.Heartbeat.Connect(() => {
+					if (this.WeaponState.TriggerState !== WeaponEnums.TriggerState.Back) {
+						FireConnection.Disconnect();
+						return;
+					}
+
+					const CurrentTime = os.clock();
+					const TimeSinceLastShot = CurrentTime - LastShot;
+					const Shots = math.floor(TimeSinceLastShot / FireDelay);
+
+					if (TimeSinceLastShot >= FireDelay) {
+						// Shoot multiple rounds per frame to insure we keep up with the firerate regardless of our FPS
+
+						for (let CurrentShot = 1; CurrentShot <= Shots; CurrentShot++) {
+							const P = this.Fire();
+
+							P.then((ShotARound) => {
+								if (ShotARound) {
+									if (this.WeaponInfo.Suppressed === true) {
+										this.PlaySound("Suppressed", [0.97, 1.03]);
+									} else {
+										this.PlaySound("Fire", [0.97, 1.03]);
+									}
+								}
+							});
+						}
+
+						LastShot += Shots * FireDelay;
+					}
+				});
+
+				while (FireConnection.Connected) {
+					task.wait();
+				}
+
+				this.WeaponState.WeaponState = WeaponEnums.WeaponActionState.Idle;
+			}
+
+			task.wait();
+		}
+	}
+
+	private SetupContextActions() {
 		ContextActionService.BindAction(
 			"Fire",
 			(ActionName: string, State: Enum.UserInputState) => {
 				switch (State) {
 					case Enum.UserInputState.Begin:
-						this.TriggerState = TriggerState.Back;
+						this.WeaponState.TriggerState = WeaponEnums.TriggerState.Back;
 						break;
 					case Enum.UserInputState.End:
-						this.TriggerState = TriggerState.Forward;
+						this.WeaponState.TriggerState = WeaponEnums.TriggerState.Forward;
 						break;
 				}
 			},
@@ -200,10 +244,12 @@ export default class WeaponLogicBase {
 			(ActionName: string, State: Enum.UserInputState) => {
 				switch (State) {
 					case Enum.UserInputState.Begin:
-						this.AimState = AimState.Aim;
+						this.WeaponState.AimState = WeaponEnums.AimState.Aim;
+						this.PlayerController.CurrentWalkSpeed = this.PlayerController.AimSpeed;
 						break;
 					case Enum.UserInputState.End:
-						this.AimState = AimState.Idle;
+						this.WeaponState.AimState = WeaponEnums.AimState.Idle;
+						this.PlayerController.CurrentWalkSpeed = this.PlayerController.WalkSpeed;
 						break;
 				}
 			},
@@ -218,20 +264,20 @@ export default class WeaponLogicBase {
 					return;
 				}
 
-				if (this.WeaponState !== WeaponState.Idle) {
+				if (this.WeaponState.WeaponState !== WeaponEnums.WeaponActionState.Idle) {
 					return;
 				}
 
-				if (this.Magazine?.Rounds.size() === this.Magazine?.Capacity) {
+				if (this.WeaponState.Magazine?.Rounds.size() === this.WeaponState.Magazine?.Capacity) {
 					return;
 				}
 
-				this.WeaponState = WeaponState.Reloading;
+				this.WeaponState.WeaponState = WeaponEnums.WeaponActionState.Reloading;
 
 				let ReloadAnim = "Reload";
 				let KeyframeFinished = "MagIn";
 
-				if (!this.Chamber) {
+				if (!this.WeaponState.Chamber) {
 					ReloadAnim = "ReloadBolt";
 					KeyframeFinished = "BoltForward";
 				}
@@ -239,7 +285,7 @@ export default class WeaponLogicBase {
 				const Connection = this.WeaponController.LoadedAnimations[ReloadAnim].GetMarkerReachedSignal(
 					KeyframeFinished,
 				).Connect(() => {
-					this.WeaponState = WeaponState.Idle;
+					this.WeaponState.WeaponState = WeaponEnums.WeaponActionState.Idle;
 					this.Reload();
 					Connection.Disconnect();
 				});
@@ -254,11 +300,11 @@ export default class WeaponLogicBase {
 	// Sounds
 
 	public PlaySound(SoundName: string, PitchVariation: [number, number] | undefined) {
-		let Sound = this.Sounds[SoundName];
+		let Sound = this.WeaponState.Sounds[SoundName];
 
 		if (!Sound) {
 			const PossibleSounds = [];
-			for (const [PossibleSoundName, PossibleSound] of pairs(this.Sounds)) {
+			for (const [PossibleSoundName, PossibleSound] of pairs(this.WeaponState.Sounds)) {
 				if (
 					string.find(PossibleSoundName as string, SoundName)[0] !== undefined &&
 					PossibleSound !== undefined
@@ -279,7 +325,10 @@ export default class WeaponLogicBase {
 		Sound = Sound.Clone();
 
 		if (PitchVariation) {
-			Sound.PlaybackSpeed = math.random(PitchVariation[0] * 100, PitchVariation[1] * 100) / 100;
+			const Pitch = new Instance("PitchShiftSoundEffect");
+			Pitch.Parent = Sound;
+			Pitch.Octave = math.random(PitchVariation[0] * 100, PitchVariation[1] * 100) / 100;
+			Pitch.Enabled = true;
 		}
 
 		Sound.Volume = 1;
@@ -297,13 +346,7 @@ export default class WeaponLogicBase {
 			S.Name = SoundName;
 		}
 
-		this.Sounds[SoundName] = S as Sound;
-	}
-
-	// Mods
-
-	public AddMod(ModToAdd: Mod) {
-		this.Mods.push(ModToAdd);
+		this.WeaponState.Sounds[SoundName] = S as Sound;
 	}
 
 	// Weapon Logic
@@ -311,9 +354,9 @@ export default class WeaponLogicBase {
 	public Reload() {
 		// warn("Starting reload.");
 
-		this.Magazine?.Reload();
+		this.WeaponState.Magazine?.Reload();
 
-		if (!this.Chamber) {
+		if (!this.WeaponState.Chamber) {
 			this.ChamberRound();
 		}
 
@@ -322,20 +365,20 @@ export default class WeaponLogicBase {
 	}
 
 	public ChamberRound() {
-		if (this.Chamber) {
+		if (this.WeaponState.Chamber) {
 			// Already a round in the chamber
 
-			this.Chamber = undefined;
+			this.WeaponState.Chamber = undefined;
 		}
 
-		const Round = this.Magazine?.Chamber();
+		const Round = this.WeaponState.Magazine?.Chamber();
 
 		if (Round) {
 			// Magazine is not empty
 
 			// warn("Round chambered.");
 
-			this.Chamber = Round;
+			this.WeaponState.Chamber = Round;
 		}
 	}
 
@@ -345,20 +388,20 @@ export default class WeaponLogicBase {
 		this.ChamberRound();
 	}
 
-	public Fire(): boolean {
-		const RoundToFire = this.Chamber;
+	public async Fire(): Promise<boolean> {
+		const RoundToFire = this.WeaponState.Chamber;
 
 		// If the chamber is empty, don't fire.
 
 		if (!RoundToFire) {
 			// warn("Weapon cannot fire because there is no round in the chamber.");
 
-			this.TriggerState = TriggerState.Forward;
+			this.WeaponState.TriggerState = WeaponEnums.TriggerState.Forward;
 
 			return false;
 		}
 
-		if (this.WeaponState === WeaponState.Reloading) {
+		if (this.WeaponState.WeaponState === WeaponEnums.WeaponActionState.Reloading) {
 			// warn("Weapon cannot fire because the weapon is reloading.");
 
 			return false;
@@ -367,20 +410,26 @@ export default class WeaponLogicBase {
 		const MuzzleCF = this.WeaponController.GetAttachmentWorldCF("Muzzle");
 
 		RoundToFire.Position = MuzzleCF.Position;
+		RoundToFire.LastPosition = RoundToFire.Position;
 		RoundToFire.SetDirection(MuzzleCF.LookVector);
-		RoundToFire.Render = true;
 
 		this.ClientBulletHandler.AddBullet(RoundToFire);
+
+		this.WeaponState.Heat += 0.007;
 
 		this.WeaponController.PlayAnimation("Fire");
 		this.WeaponController.ApplyRecoil(this.WeaponController.Recoil.Multiplier);
 		this.WeaponController.EmitFlash();
 
-		this.Chamber = undefined;
+		this.WeaponState.Chamber = undefined;
 
-		if (this.BoltType === BoltType.Automatic) {
+		if (this.WeaponState.BoltType === WeaponEnums.BoltType.Automatic) {
 			this.PullBolt();
 		}
+
+		// Remotes.Client.GetNamespace(NetworkingEnums.RemoteNamespaceId.Weapons)
+		// 	.Get(NetworkingEnums.RemoteId.FireRound)
+		// 	.SendToServer();
 
 		return true;
 	}
